@@ -1,6 +1,6 @@
 # telegram-internet-tracker-bot
 
-A Telegram bot that monitors internet usage and network quality on a Linux server. Data is collected every 5 minutes and stored in SQLite.
+A Telegram bot that monitors internet usage and network quality on a Linux server. Data is collected every 5 minutes and stored in SQLite. Sends automatic alerts when latency or packet loss exceeds configured thresholds.
 
 ## Requirements
 
@@ -32,16 +32,33 @@ Edit `.env` to change defaults:
 | `NETWORK_INTERFACE` | `wlp2s0` | Network interface to monitor |
 | `PING_TARGET` | `8.8.8.8` | Target IP for latency checks |
 | `COLLECT_INTERVAL_MINUTES` | `5` | How often to collect data |
+| `ALERT_LATENCY_MS` | `150` | Alert threshold for latency (ms) |
+| `ALERT_LOSS_PCT` | `10` | Alert threshold for packet loss (%) |
+| `ALERT_COOLDOWN_MINUTES` | `30` | Minimum time between alerts |
 
 ## Commands
 
 | Command | Description |
 |---|---|
+| `/start` | Show the button keyboard |
+| `/status` | Current ping + today's and monthly traffic at a glance |
 | `/usage` | Monthly download / upload / total |
 | `/daily` | Traffic for the last 7 days |
-| `/speed` | Hourly average speed for today |
 | `/slowhours` | Top 5 slowest hours in the last 7 days |
 | `/ping` | Real-time latency and packet loss |
+
+## Alerts
+
+The bot automatically sends a message when network quality drops below thresholds:
+
+```
+⚠️ Network Alert
+High latency: 320 ms  (threshold: 150 ms)
+Packet loss: 15%  (threshold: 10%)
+Time: 21:43 UTC
+```
+
+Alerts are rate-limited by `ALERT_COOLDOWN_MINUTES` to avoid spam.
 
 ## Notes
 
