@@ -1,0 +1,12 @@
+services:
+  bot:
+    build: .
+    restart: unless-stopped
+    network_mode: host
+    cap_add:
+      - NET_RAW
+    volumes:
+      - ./data:/app/data
+      - /var/lib/vnstat:/var/lib/vnstat:ro
+    env_file:
+      - .env
