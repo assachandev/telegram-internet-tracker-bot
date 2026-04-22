@@ -13,9 +13,9 @@ from db import get_connection, init_db
 
 MAIN_KEYBOARD = ReplyKeyboardMarkup(
     [
+        [KeyboardButton("📋 Status"), KeyboardButton("🏓 Ping")],
         [KeyboardButton("📊 Usage"), KeyboardButton("📅 Daily")],
-        [KeyboardButton("⚡ Speed"), KeyboardButton("🐢 Slow Hours")],
-        [KeyboardButton("🏓 Ping")],
+        [KeyboardButton("🐢 Slow Hours")],
     ],
     resize_keyboard=True,
 )
@@ -46,6 +46,60 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "Internet Tracker ready.",
         reply_markup=MAIN_KEYBOARD,
     )
+
+
+# ── /status ──────────────────────────────────────────────────────────────────
+
+@auth_only
+async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    try:
+        # ping
+        latency, packet_loss = collect_ping()
+        if latency is None:
+            ping_line = f"timeout  (loss {packet_loss:.0f}%)"
+        else:
+            ping_line = f"{latency:.1f} ms  (loss {packet_loss:.0f}%)"
+
+        # today's traffic from SQLite
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        with get_connection() as conn:
+            row = conn.execute(
+                "SELECT MIN(rx_bytes) as rx_min, MAX(rx_bytes) as rx_max, "
+                "MIN(tx_bytes) as tx_min, MAX(tx_bytes) as tx_max "
+                "FROM traffic WHERE date(timestamp) = ?",
+                (today,)
+            ).fetchone()
+
+        if row and row["rx_max"] is not None:
+            rx_today = max(0, row["rx_max"] - row["rx_min"])
+            tx_today = max(0, row["tx_max"] - row["tx_min"])
+            today_line = f"↓ {format_bytes(rx_today)}  ↑ {format_bytes(tx_today)}"
+        else:
+            today_line = "No data yet"
+
+        # monthly from vnstat
+        result = subprocess.run(
+            ["vnstat", "-i", config.NETWORK_INTERFACE, "--json", "m", "1"],
+            capture_output=True, text=True, timeout=10
+        )
+        data = json.loads(result.stdout)
+        month = data["interfaces"][0]["traffic"]["month"]
+        if month:
+            latest = month[-1]
+            month_line = f"↓ {format_bytes(latest['rx'])}  ↑ {format_bytes(latest['tx'])}"
+        else:
+            month_line = "No data yet"
+
+        text = (
+            f"📋 Status\n"
+            f"Ping   : {ping_line}\n"
+            f"Today  : {today_line}\n"
+            f"Month  : {month_line}"
+        )
+        await update.message.reply_text(text)
+
+    except Exception as e:
+        await update.message.reply_text(f"Error fetching status: {e}")
 
 
 # ── /usage ──────────────────────────────────────────────────────────────────
@@ -114,37 +168,6 @@ async def cmd_daily(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text(f"Error fetching daily usage: {e}")
 
 
-# ── /speed ───────────────────────────────────────────────────────────────────
-
-@auth_only
-async def cmd_speed(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    try:
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        with get_connection() as conn:
-            rows = conn.execute(
-                "SELECT strftime('%H', timestamp) as hour, "
-                "AVG(rx_rate_kbps) as avg_rx, AVG(tx_rate_kbps) as avg_tx "
-                "FROM traffic WHERE date(timestamp) = ? "
-                "GROUP BY hour ORDER BY hour",
-                (today,)
-            ).fetchall()
-
-        if not rows:
-            await update.message.reply_text("No data yet for today.")
-            return
-
-        lines = ["⚡ Speed Today (hourly avg)"]
-        for row in rows:
-            rx_mbps = row["avg_rx"] / 1000
-            tx_mbps = row["avg_tx"] / 1000
-            lines.append(f"{row['hour']}:00  ↓ {rx_mbps:.1f} Mbps  ↑ {tx_mbps:.1f} Mbps")
-
-        await update.message.reply_text("\n".join(lines))
-
-    except Exception as e:
-        await update.message.reply_text(f"Error fetching speed: {e}")
-
-
 # ── /slowhours ───────────────────────────────────────────────────────────────
 
 @auth_only
@@ -206,9 +229,9 @@ async def cmd_ping(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 # ── keyboard button router ────────────────────────────────────────────────────
 
 BUTTON_HANDLERS = {
+    "📋 Status": cmd_status,
     "📊 Usage": cmd_usage,
     "📅 Daily": cmd_daily,
-    "⚡ Speed": cmd_speed,
     "🐢 Slow Hours": cmd_slowhours,
     "🏓 Ping": cmd_ping,
 }
@@ -229,9 +252,9 @@ def main() -> None:
 
     app = Application.builder().token(config.TELEGRAM_BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", cmd_start))
+    app.add_handler(CommandHandler("status", cmd_status))
     app.add_handler(CommandHandler("usage", cmd_usage))
     app.add_handler(CommandHandler("daily", cmd_daily))
-    app.add_handler(CommandHandler("speed", cmd_speed))
     app.add_handler(CommandHandler("slowhours", cmd_slowhours))
     app.add_handler(CommandHandler("ping", cmd_ping))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_keyboard))
