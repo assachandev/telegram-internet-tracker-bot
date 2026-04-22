@@ -1,10 +1,31 @@
 import json
 import re
 import subprocess
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
+import requests
+
+import config
 from config import NETWORK_INTERFACE, PING_TARGET
 from db import get_connection
+
+_last_alert_time: datetime | None = None
+
+
+def _send_alert(text: str) -> None:
+    global _last_alert_time
+    now = datetime.now(timezone.utc)
+    if _last_alert_time and (now - _last_alert_time) < timedelta(minutes=config.ALERT_COOLDOWN_MINUTES):
+        return
+    try:
+        requests.post(
+            f"https://api.telegram.org/bot{config.TELEGRAM_BOT_TOKEN}/sendMessage",
+            json={"chat_id": config.TELEGRAM_CHAT_ID, "text": text},
+            timeout=10,
+        )
+        _last_alert_time = now
+    except Exception as e:
+        print(f"[collector] alert error: {e}")
 
 
 def collect_traffic() -> None:
@@ -70,11 +91,27 @@ def collect_ping() -> tuple[float | None, float]:
             )
             conn.commit()
 
+        _check_and_alert(latency, packet_loss)
         return latency, packet_loss
 
     except Exception as e:
         print(f"[collector] ping error: {e}")
         return None, 100.0
+
+
+def _check_and_alert(latency: float | None, packet_loss: float) -> None:
+    issues = []
+    if latency is None:
+        issues.append("Internet is unreachable (ping timeout)")
+    elif latency > config.ALERT_LATENCY_MS:
+        issues.append(f"High latency: {latency:.0f} ms  (threshold: {config.ALERT_LATENCY_MS:.0f} ms)")
+    if packet_loss > config.ALERT_LOSS_PCT:
+        issues.append(f"Packet loss: {packet_loss:.0f}%  (threshold: {config.ALERT_LOSS_PCT:.0f}%)")
+
+    if issues:
+        time_str = datetime.now(timezone.utc).strftime("%H:%M UTC")
+        text = "⚠️ Network Alert\n" + "\n".join(issues) + f"\nTime: {time_str}"
+        _send_alert(text)
 
 
 def collect_all() -> None:
