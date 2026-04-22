@@ -1,15 +1,24 @@
-import asyncio
+import json
 import subprocess
-import re
 from datetime import datetime, timezone, timedelta
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
 import config
 from collector import collect_all, collect_ping
 from db import get_connection, init_db
+
+
+MAIN_KEYBOARD = ReplyKeyboardMarkup(
+    [
+        [KeyboardButton("📊 Usage"), KeyboardButton("📅 Daily")],
+        [KeyboardButton("⚡ Speed"), KeyboardButton("🐢 Slow Hours")],
+        [KeyboardButton("🏓 Ping")],
+    ],
+    resize_keyboard=True,
+)
 
 
 def auth_only(func):
@@ -29,12 +38,21 @@ def format_bytes(b: int) -> str:
     return f"{b / 1_000:.1f} KB"
 
 
+# ── /start ───────────────────────────────────────────────────────────────────
+
+@auth_only
+async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.message.reply_text(
+        "Internet Tracker ready.",
+        reply_markup=MAIN_KEYBOARD,
+    )
+
+
 # ── /usage ──────────────────────────────────────────────────────────────────
 
 @auth_only
 async def cmd_usage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     try:
-        import json
         result = subprocess.run(
             ["vnstat", "-i", config.NETWORK_INTERFACE, "--json", "m", "1"],
             capture_output=True, text=True, timeout=10
@@ -185,17 +203,38 @@ async def cmd_ping(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text(f"Error running ping: {e}")
 
 
+# ── keyboard button router ────────────────────────────────────────────────────
+
+BUTTON_HANDLERS = {
+    "📊 Usage": cmd_usage,
+    "📅 Daily": cmd_daily,
+    "⚡ Speed": cmd_speed,
+    "🐢 Slow Hours": cmd_slowhours,
+    "🏓 Ping": cmd_ping,
+}
+
+
+@auth_only
+async def handle_keyboard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    text = update.message.text
+    handler = BUTTON_HANDLERS.get(text)
+    if handler:
+        await handler(update, context)
+
+
 # ── main ──────────────────────────────────────────────────────────────────────
 
 def main() -> None:
     init_db()
 
     app = Application.builder().token(config.TELEGRAM_BOT_TOKEN).build()
+    app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("usage", cmd_usage))
     app.add_handler(CommandHandler("daily", cmd_daily))
     app.add_handler(CommandHandler("speed", cmd_speed))
     app.add_handler(CommandHandler("slowhours", cmd_slowhours))
     app.add_handler(CommandHandler("ping", cmd_ping))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_keyboard))
 
     scheduler = AsyncIOScheduler()
     scheduler.add_job(collect_all, "interval", minutes=config.COLLECT_INTERVAL_MINUTES)
