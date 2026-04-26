@@ -31,7 +31,7 @@ def _send_alert(text: str) -> None:
 def collect_traffic() -> None:
     try:
         result = subprocess.run(
-            ["vnstat", "-i", NETWORK_INTERFACE, "--json", "5"],
+            ["vnstat", "-i", NETWORK_INTERFACE, "--json"],
             capture_output=True, text=True, timeout=10
         )
         data = json.loads(result.stdout)
